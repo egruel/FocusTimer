@@ -1,0 +1,19 @@
+{
+  "id": "focustimer",
+  "name": "Focus Timer",
+  "shortName": "Focus",
+  "version": "0.01",
+  "description": "Timer de concentration avec check-ins reguliers pour aider un enfant a dire si tout va bien, si c'est moyen ou s'il est bloque.",
+  "icon": "app.png",
+  "type": "app",
+  "tags": "tool,widget",
+  "supports": ["BANGLEJS2"],
+  "allow_emulator": true,
+  "storage": [
+    {"name": "focustimer.app.js",      "url": "app.js"},
+    {"name": "focustimer.img",         "url": "app-icon.js", "evaluate": true},
+    {"name": "focustimer.wid.js",      "url": "widget.js"},
+    {"name": "focustimer.settings.js", "url": "app-settings.js"},
+    {"name": "focustimer.msg.json",    "url": "messages.json"}
+  ]
+}
