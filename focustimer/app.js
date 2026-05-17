@@ -326,6 +326,8 @@ function tick() {
   state.elapsed++;
   if (state.elapsed >= state.totalSec) {
     stopTimer();
+    Bangle.setLCDPower(1);
+    Bangle.setLocked(false);
     goState('DONE', drawDone);
     return;
   }
