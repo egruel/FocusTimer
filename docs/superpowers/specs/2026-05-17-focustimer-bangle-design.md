@@ -18,13 +18,16 @@ Application autonome sur Bangle.js 2 qui aide un enfant avec TDA à rester conce
 focustimer/
 ├── metadata.json        # Identité App Store : nom, version, icône, permissions
 ├── app.js               # Machine d'états principale (point d'entrée)
+├── widget.js            # Widget "FT" ouvrant l'app depuis une clock compatible
 ├── app-settings.js      # Écran de config (durée session, intervalle check-in)
 ├── messages.json        # Messages d'aide par couleur, stocké en flash
-└── app.png              # Icône 48×48px pour le menu système
+├── app.png              # Icône 48×48px pour l'App Loader
+└── app-icon.js          # Image Espruino évaluée en focustimer.img pour le launcher
 ```
 
 **Responsabilités :**
 - `app.js` orchestre les transitions d'état et lit les données depuis le Storage — il ne contient pas les messages en dur
+- `widget.js` enregistre `WIDGETS.focustimer` et lance `load("focustimer.app.js")` quand sa zone est touchée
 - `app-settings.js` est chargé à la demande par le système Bangle.js (menu Réglages) et n'alourdit pas l'app au démarrage
 - `messages.json` est éditable indépendamment via l'App Loader — un adulte peut personnaliser les messages sans toucher au code
 
@@ -53,18 +56,19 @@ L'état courant est stocké dans un objet central unique dans `app.js`. Aucune v
 
 ## Interface utilisateur
 
-Écran rond 240×240px. UI conçue pour un enfant : grand texte, couleurs vives, zones tactiles larges.
+Écran Bangle.js 2 176×176px avec barre widgets de 24px. UI conçue pour un enfant : grand texte, couleurs vives, zones tactiles larges.
 
 ### IDLE — Écran de démarrage
 
 ```
 ┌─────────────────────┐
 │                     │
-│    ⏱  FOCUS        │
+│       FOCUS         │
+│       Timer         │
 │                     │
-│   [ 15 min  ▲▼ ]   │  ← BTN1 (+) / BTN2 (-) pour changer la durée
+│  [10] [15] [20]    │  ← gros boutons tactiles circulaires
 │                     │
-│   [ ▶ DÉMARRER ]   │  ← BTN3 ou tap pour lancer
+│  choisis une duree │
 │                     │
 └─────────────────────┘
 ```
@@ -73,12 +77,11 @@ L'état courant est stocké dans un objet central unique dans `app.js`. Aucune v
 
 ```
 ┌─────────────────────┐
-│   14:32             │  ← temps restant, police large
+│       14:32         │  ← temps restant
 │                     │
-│   ████████░░  80%   │  ← barre de progression
+│    disque rempli    │  ← temps restant, vert → orange → rouge
 │                     │
-│   prochain check    │
-│   dans 3 min        │
+│   check 03:00       │
 └─────────────────────┘
 ```
 
@@ -88,38 +91,37 @@ La montre peut entrer en veille — le timer continue en arrière-plan.
 
 ```
 ┌─────────────────────┐
-│  Comment tu vas ?   │
+│      Ca va ?         │
 │                     │
 │  ┌─────────────┐    │
-│  │  🟢  TOP   │    │  ← zone tactile haute
+│  │  :)  TOP   │    │  ← zone tactile haute
 │  ├─────────────┤    │
-│  │ 🟠  MOYEN  │    │  ← zone tactile milieu
+│  │  :| MOYEN  │    │  ← zone tactile milieu
 │  ├─────────────┤    │
-│  │  🔴  BLOQUÉ│    │  ← zone tactile basse
+│  │  :( BLOQUE │    │  ← zone tactile basse
 │  └─────────────┘    │
 └─────────────────────┘
 ```
 
 ### HELP — Message d'aide (🟠 ou 🔴)
 
-Fond coloré (orange ou rouge), texte court, bouton "OK, compris" pour reprendre.
+Bandeau coloré (orange ou rouge), texte court, bouton "OK" pour reprendre. Les écrans de feedback n'utilisent plus de grand disque coloré au centre afin d'éviter toute persistance visuelle derrière le timer.
 
 ```
 ┌─────────────────────┐  ← fond rouge
 │                     │
-│  Demande de l'aide  │
-│  à quelqu'un !      │
+│  Demande aide !     │
 │                     │
-│   [ OK, compris ]   │
+│        [ OK ]       │
 │                     │
 └─────────────────────┘
 ```
 
-Après "OK, compris" → retour à WORKING, le timer reprend là où il s'est arrêté.
+Après "OK" → retour à WORKING, le timer reprend là où il s'est arrêté.
 
 ### DONE — Fin de session
 
-Vibration longue + écran de célébration (fond vert, emoji, texte "Bravo !").
+Vibration en trois temps + écran de célébration.
 
 ---
 
@@ -155,9 +157,9 @@ Si absent, des messages par défaut sont définis dans `app.js` en fallback.
 | Situation | Comportement |
 |---|---|
 | Premier lancement (pas de fichiers JSON) | Valeurs par défaut silencieuses, pas d'erreur |
-| Veille pendant WORKING | `setInterval` continue, `Bangle.buzz()` réveille pour le check-in |
-| BTN1 long pendant la session | Retour menu système natif Bangle.js (comportement standard, non bloqué) |
-| Batterie faible | Indicateur discret, session non interrompue |
+| Veille pendant WORKING | `setInterval` continue, `Bangle.setLCDPower(1)` et `Bangle.setLocked(false)` affichent le check-in |
+| Bouton long pendant la session | Retour menu système natif Bangle.js (comportement standard, non bloqué) |
+| App lancée depuis une clock | Le widget `FT` ouvre `focustimer.app.js` si la clock charge les widgets |
 | Durée ≤ intervalle check-in | Un seul check-in avant la fin, comportement cohérent |
 | Timer fin pendant un check-in | DONE prioritaire, pas de superposition d'états |
 
@@ -168,10 +170,12 @@ Si absent, des messages par défaut sont définis dans `app.js` en fallback.
 - **Langage :** Espruino JavaScript (subset ES5/ES6, pas de modules npm)
 - **Mémoire :** ~64 KB RAM disponibles pour l'app — pas de bibliothèques lourdes
 - **Storage flash :** `require('Storage')` pour la persistance
-- **Affichage :** `require('Graphics')` via `g` global, 240×240px couleur
-- **Entrées :** touchscreen + BTN1 / BTN2 / BTN3
+- **Affichage :** `Graphics` via `g` global, 176×176px couleur sur Bangle.js 2
+- **Entrées :** touchscreen + bouton système Bangle.js 2
 - **Vibration :** `Bangle.buzz(durée_ms, intensité)`
 - **Timer :** `setInterval` / `setTimeout` natifs Espruino
+- **Widgets :** fichier `focustimer.wid.js`, chargé par `Bangle.loadWidgets()`
+- **Icône launcher :** `app.png` pour l'App Loader, `app-icon.js` évalué en `focustimer.img` sur la montre
 
 ---
 

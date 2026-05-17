@@ -4,9 +4,11 @@
 
 **Goal:** Construire une app Bangle.js 2 standalone qui aide un enfant de 8 ans avec TDA à rester concentré via des sessions de travail minutées et des check-ins périodiques avec code couleur.
 
-**Architecture:** Structure compatible App Store Bangle.js en 5 fichiers. `app.js` héberge une machine d'états centrale (IDLE → WORKING → CHECKIN → HELP → DONE) et toutes les fonctions de rendu. Les fonctions pures (formatage temps, progression, config par défaut) sont extraites en tête de fichier et testées avec Node.js + `assert` avant d'être intégrées dans l'app. Le code Bangle-spécifique (Storage, Graphics, buzz, touch) reste dans `app.js`.
+**Architecture:** Structure compatible App Loader Bangle.js. `app.js` héberge une machine d'états centrale (IDLE → WORKING → CHECKIN → HELP → DONE) et toutes les fonctions de rendu. Les fonctions pures (formatage temps, progression, choix de couleur, limitation `fillPoly`) sont extraites en tête de fichier et testées avec Node.js + `assert`. `widget.js` ajoute un raccourci `FT` dans la barre widgets pour ouvrir l'app depuis une clock compatible.
 
 **Tech Stack:** Espruino JavaScript (Bangle.js 2 SDK), Node.js + `assert` (tests des fonctions pures uniquement)
+
+**État actuel :** ce plan a servi à construire l'app. Pour l'état final, voir aussi `README.md` et la spec mise à jour. Les points importants de la version actuelle sont : écran 176×176, présélections tactiles 10/15/20 min, timer circulaire rempli, check-in qui rallume et déverrouille la montre, widget `FT`, icône App Loader via `app.png` + `app-icon.js`.
 
 ---
 
@@ -16,9 +18,11 @@
 |---|---|
 | `focustimer/metadata.json` | Identité App Store (nom, version, icône, permissions, liste storage) |
 | `focustimer/app.js` | Machine d'états, timers, rendu UI, gestion touch |
+| `focustimer/widget.js` | Widget `FT` ouvrant `focustimer.app.js` |
 | `focustimer/app-settings.js` | Menu réglages (durée travail, intervalle check-in) |
 | `focustimer/messages.json` | Messages d'aide par couleur (éditable sans toucher au code) |
-| `focustimer/app.png` | Icône 48×48px pour le launcher Bangle.js |
+| `focustimer/app.png` | Icône 48×48px visible dans l'App Loader |
+| `focustimer/app-icon.js` | Image Espruino évaluée en `focustimer.img` pour le launcher |
 | `focustimer/tests/logic.test.js` | Tests Node.js des fonctions pures |
 
 ---
@@ -54,17 +58,20 @@ Créer `focustimer/metadata.json` :
 {
   "id": "focustimer",
   "name": "Focus Timer",
+  "shortName": "Focus",
   "version": "0.01",
-  "description": "Timer avec check-ins pour enfants TDA",
+  "description": "Timer de concentration avec check-ins reguliers pour aider un enfant a dire si tout va bien, si c'est moyen ou s'il est bloque.",
   "icon": "app.png",
   "type": "app",
-  "tags": "productivity",
+  "tags": "tool,widget",
   "supports": ["BANGLEJS2"],
+  "allow_emulator": true,
   "storage": [
     {"name": "focustimer.app.js",      "url": "app.js"},
+    {"name": "focustimer.img",         "url": "app-icon.js", "evaluate": true},
+    {"name": "focustimer.wid.js",      "url": "widget.js"},
     {"name": "focustimer.settings.js", "url": "app-settings.js"},
-    {"name": "focustimer.msg.json",    "url": "messages.json"},
-    {"name": "focustimer.img",         "url": "app.png", "evaluate": true}
+    {"name": "focustimer.msg.json",    "url": "messages.json"}
   ]
 }
 ```
@@ -81,14 +88,11 @@ Créer `focustimer/messages.json` :
 }
 ```
 
-- [ ] **Step 5 : Créer un placeholder d'icône**
+- [ ] **Step 5 : Créer les icônes**
 
-```bash
-# Icône temporaire 1x1 pixel PNG (base64 minimal valide)
-echo 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' | base64 -d > focustimer/app.png
-```
+Créer `app.png` en 48×48px pour l'App Loader, puis convertir cette icône en `app-icon.js` au format image Espruino. `metadata.json` doit envoyer `app-icon.js` vers `focustimer.img` avec `evaluate: true`.
 
-Note : remplacer `app.png` par une vraie icône 48×48px verte avec "⏱" avant publication sur l'App Store.
+Ne pas ajouter manuellement `focustimer.info` dans `storage` : l'App Loader le génère depuis `metadata.json`.
 
 - [ ] **Step 6 : Commit**
 
@@ -205,10 +209,10 @@ git commit -m "feat: fonctions pures avec tests Node.js (formatTime, calcProgres
 
 Note matérielle : la **Bangle.js 2 n'a qu'un seul bouton physique** (BTN1). Toute interaction de l'app passe par le **touchscreen**. BTN1 (appui long) est réservé au menu système Bangle.js — on n'y attache aucun handler pour ne pas interférer.
 
-L'écran IDLE utilise trois zones tactiles :
-- Zone gauche (x < 80) : diminuer la durée (−5 min)
-- Zone droite (x > 160) : augmenter la durée (+5 min)
-- Zone basse (y > 188) : démarrer la session
+L'écran IDLE final utilise trois zones tactiles circulaires :
+- 10 min à gauche
+- 15 min au centre
+- 20 min à droite
 
 Créer `focustimer/app.js` :
 
@@ -393,7 +397,7 @@ git commit -m "feat: machine d'états et écran IDLE avec sélecteur de durée"
 
 ---
 
-### Task 4 : Écran WORKING + décompte
+### Task 4 : Écran WORKING + décompte circulaire
 
 **Files:**
 - Modify: `focustimer/app.js` — remplacer le stub `drawWorking`
@@ -404,29 +408,28 @@ Dans `app.js`, remplacer `function drawWorking() { /* Task 4 */ }` par :
 
 ```javascript
 function drawWorking() {
-  var remaining   = state.totalSec - state.elapsed;
-  var progress    = calcProgress(state.elapsed, state.totalSec);
-  var untilCheck  = secondsUntilNextCheck(state.elapsed, state.checkEvery);
+  var remaining = state.totalSec - state.elapsed;
+  var timeTxt   = formatTime(remaining);
+  if (timeTxt === state.lastTimeTxt) return;
+  state.lastTimeTxt = timeTxt;
 
-  g.clear();
+  fillBg();
 
-  // Temps restant — police large
-  g.setColor(C.white);
-  g.setFont('Vector', 52);
+  var cx = CX, cy = 88, r = 60;
+  var fraction = clampFraction(state.totalSec > 0 ? remaining / state.totalSec : 0);
+  var col = C[timerColorName(fraction)];
+
+  drawRing(cx, cy, r, fraction, col);
+
+  g.setColor(C.black);
+  g.setFont('Vector', 24);
   g.setFontAlign(0, 0);
-  g.drawString(formatTime(remaining), 120, 78);
+  g.drawString(timeTxt, cx, cy - 4);
 
-  // Barre de progression (fond gris + remplissage vert)
-  var bx = 30, by = 128, bw = 180, bh = 14;
+  var untilCheck = secondsUntilNextCheck(state.elapsed, state.checkEvery);
   g.setColor(C.grey);
-  g.fillRect(bx, by, bx + bw, by + bh);
-  g.setColor(C.green);
-  g.fillRect(bx, by, bx + Math.floor(bw * progress / 100), by + bh);
-
-  // Prochain check-in
-  g.setColor(C.white);
-  g.setFont('Vector', 18);
-  g.drawString('check dans ' + formatTime(untilCheck), 120, 163);
+  g.setFont('Vector', 12);
+  g.drawString('check ' + formatTime(untilCheck), cx, 162);
 }
 ```
 
@@ -434,15 +437,15 @@ function drawWorking() {
 
 Uploader `app.js` → tap DEMARRER → vérifier :
 - Timer démarre à "15:00" et décompte chaque seconde
-- Barre de progression s'allonge de gauche à droite
-- "check dans MM:SS" décroît vers 0
+- Disque de temps restant rempli, coloré vert puis orange puis rouge
+- "check MM:SS" décroît vers 0
 - À 5 minutes (elapsed = 300) : double buzz, écran CHECKIN (stub vide — normal)
 
 - [ ] **Step 3 : Commit**
 
 ```bash
 git add focustimer/app.js
-git commit -m "feat: écran WORKING avec décompte et barre de progression"
+git commit -m "feat: écran WORKING avec décompte circulaire"
 ```
 
 ---
@@ -495,7 +498,7 @@ function handleCheckinTouch(y) {
     // Vert : flash d'encouragement 2s puis reprise automatique
     g.clear();
     g.setColor(C.green);
-    g.fillRect(0, 0, 240, 240);
+    g.fillRect(0, 0, W - 1, H - 1);
     g.setColor(C.black);
     g.setFont('Vector', 24);
     g.setFontAlign(0, 0);
@@ -560,7 +563,7 @@ function drawHelp() {
 
   g.clear();
   g.setColor(bgColor);
-  g.fillRect(0, 0, 240, 240);
+    g.fillRect(0, 0, W - 1, H - 1);
 
   // Découpe le message en lignes (max 16 chars par ligne)
   var words = msg.split(' '), lines = [], line = '';
@@ -576,12 +579,12 @@ function drawHelp() {
   var startY = 95 - (lines.length - 1) * 20;
   lines.forEach(function(l, i) { g.drawString(l, 120, startY + i * 44); });
 
-  // Bouton "OK, compris"
+  // Bouton "OK"
   g.setColor(C.white);
   g.fillRect(45, 192, 195, 230);
   g.setColor(bgColor);
   g.setFont('Vector', 20);
-  g.drawString('OK, compris', 120, 211);
+  g.drawString('OK', 120, 211);
 }
 ```
 
@@ -590,7 +593,7 @@ function drawHelp() {
 Uploader `app.js` → déclencher un check-in → tap zone orange → vérifier :
 - Fond orange
 - Texte du message `msgs.orange` affiché lisiblement (retour à la ligne si besoin)
-- Bouton blanc "OK, compris" en bas
+- Bouton blanc "OK" en bas
 - Tap sur le bouton → retour à WORKING, timer reprend
 
 Répéter pour la zone rouge avec `msgs.red`.
@@ -617,7 +620,7 @@ Dans `app.js`, remplacer `function drawDone() { /* Task 7 */ }` par :
 function drawDone() {
   g.clear();
   g.setColor(C.green);
-  g.fillRect(0, 0, 240, 240);
+  g.fillRect(0, 0, W - 1, H - 1);
 
   g.setColor(C.white);
   g.setFont('Vector', 44);
@@ -693,7 +696,7 @@ git commit -m "feat: écran DONE avec célébration et buzz festif"
 - [ ] **Step 2 : Vérifier dans l'émulateur**
 
 Dans l'émulateur Bangle.js : Settings → Apps → Focus Timer → Settings → vérifier :
-- "Duree travail (min)" : cycles 5/10/…/60 avec BTN1/BTN2
+- "Duree travail (min)" : cycles 5/10/…/60 via le menu tactile Bangle
 - "Intervalle check (min)" : cycles 1/2/…/15
 - Relancer l'app → les valeurs modifiées sont appliquées (lues depuis `focustimer.json`)
 
@@ -720,25 +723,24 @@ Expected : `Tous les tests passent.`
 
 - [ ] **Step 2 : Checklist de validation dans l'émulateur Bangle.js**
 
-Uploader tous les fichiers (`app.js`, `app-settings.js`, `messages.json`, `metadata.json`) dans l'émulateur.
+Uploader tous les fichiers de `metadata.json` dans l'émulateur : `app.js`, `app-icon.js`, `widget.js`, `app-settings.js`, `messages.json`, `metadata.json`, `app.png`.
 
 | # | Scénario | Résultat attendu |
 |---|---|---|
-| 1 | Lancement app | Écran IDLE : "⏱ FOCUS", "15 min", bouton vert |
-| 2 | BTN1 (×3) | Durée passe à 30 min |
-| 3 | BTN2 (×2) | Durée revient à 20 min |
-| 4 | BTN1 au-delà de 60 min | Bloqué à 60 min |
-| 5 | BTN2 en dessous de 5 min | Bloqué à 5 min |
-| 6 | Tap DEMARRER | Écran WORKING : "20:00" qui décompte, barre vide |
-| 7 | Après 30s | Barre à ~2%, "check dans 04:30" |
-| 8 | À 5 min (elapsed=300) | Double buzz, écran CHECKIN apparaît |
-| 9 | Tap zone verte | Flash vert + message, reprise auto 2s |
+| 1 | Lancement app | Écran IDLE : "FOCUS", "Timer", boutons 10/15/20 |
+| 2 | Tap 10 | Écran WORKING : "10:00" qui décompte |
+| 3 | Retour IDLE puis tap 15 | Écran WORKING : "15:00" |
+| 4 | Retour IDLE puis tap 20 | Écran WORKING : "20:00" |
+| 5 | Widget `FT` depuis une clock | Ouvre `focustimer.app.js` |
+| 6 | Après 30s | Disque rempli partiellement, "check 04:30" |
+| 7 | À 5 min (elapsed=300) | Écran allumé, montre déverrouillée, double buzz, écran CHECKIN |
+| 8 | Tap zone verte | Bandeau vert + message, reprise auto 2s |
 | 10 | À 10 min (elapsed=600) | Double buzz, écran CHECKIN |
-| 11 | Tap zone orange | Fond orange, message orange, bouton "OK" |
-| 12 | Tap "OK, compris" | Retour WORKING, timer reprend |
+| 11 | Tap zone orange | Bandeau orange, message orange, bouton "OK" |
+| 12 | Tap "OK" | Retour WORKING, timer reprend |
 | 13 | À 15 min (elapsed=900) | Double buzz, écran CHECKIN |
-| 14 | Tap zone rouge | Fond rouge, message rouge, bouton "OK" |
-| 15 | Tap "OK, compris" | Retour WORKING, timer reprend |
+| 14 | Tap zone rouge | Bandeau rouge, message rouge, bouton "OK" |
+| 15 | Tap "OK" | Retour WORKING, timer reprend |
 | 16 | Fin session (20 min) | Écran vert "Bravo !", 3 buzzs, tap → IDLE |
 | 17 | Réglages : durée = 10 min | App redémarre avec 10 min |
 | 18 | Réglages : intervalle = 2 min | Check-in toutes les 2 min |
